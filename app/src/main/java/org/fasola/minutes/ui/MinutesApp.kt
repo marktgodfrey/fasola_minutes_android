@@ -67,6 +67,10 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.Saver
+import androidx.compose.runtime.saveable.listSaver
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -136,6 +140,7 @@ fun MinutesApp(repository: MinutesRepository, initialLeaders: List<LeaderSummary
     val audioPlayer = remember { AudioPlayerController(context) }
     DisposableEffect(audioPlayer) { onDispose { audioPlayer.close() } }
     var section by remember { mutableStateOf(Section.Leaders) }
+    val tabStateHolder = rememberSaveableStateHolder()
     val backStack = remember { mutableStateListOf<Destination>(Destination.List) }
     val destination = backStack.last()
     val open: (Destination) -> Unit = { backStack.add(it) }
@@ -144,8 +149,10 @@ fun MinutesApp(repository: MinutesRepository, initialLeaders: List<LeaderSummary
     BackHandler(enabled = backStack.size > 1, onBack = back)
 
     Box(Modifier.fillMaxSize()) {
-    when (val page = destination) {
-        Destination.List -> Scaffold(
+        // Keep the selected browse screen composed while a detail destination is open. Removing
+        // it from composition would reset its remembered query, filters, sorting, and scroll
+        // position when the user navigates back.
+        Scaffold(
             contentWindowInsets = WindowInsets(0, 0, 0, 0),
             bottomBar = {
                 NavigationBar(containerColor = PaperColor, contentColor = FontColor) {
@@ -168,76 +175,85 @@ fun MinutesApp(repository: MinutesRepository, initialLeaders: List<LeaderSummary
             },
         ) { padding ->
             when (section) {
-                Section.Singings -> SingingsScreen(
-                    repository,
-                    Modifier.padding(padding),
-                    open = { open(Destination.Singing(it)) },
-                    openMap = { open(Destination.LocationsMap("Singing Locations")) },
-                    openHelp = { open(Destination.Help) },
-                )
-                Section.Songs -> SongsScreen(
-                    repository,
-                    Modifier.padding(padding),
-                    open = { open(Destination.Song(it)) },
-                    openHelp = { open(Destination.Help) },
-                )
-                Section.Leaders -> LeadersScreen(
-                    repository,
-                    initialLeaders,
-                    Modifier.padding(padding),
-                    open = { open(Destination.Leader(it)) },
-                    openHelp = { open(Destination.Help) },
-                )
+                Section.Singings -> tabStateHolder.SaveableStateProvider(Section.Singings.name) {
+                    SingingsScreen(
+                        repository,
+                        Modifier.padding(padding),
+                        open = { open(Destination.Singing(it)) },
+                        openMap = { open(Destination.LocationsMap("Singing Locations")) },
+                        openHelp = { open(Destination.Help) },
+                    )
+                }
+                Section.Songs -> tabStateHolder.SaveableStateProvider(Section.Songs.name) {
+                    SongsScreen(
+                        repository,
+                        Modifier.padding(padding),
+                        open = { open(Destination.Song(it)) },
+                        openHelp = { open(Destination.Help) },
+                    )
+                }
+                Section.Leaders -> tabStateHolder.SaveableStateProvider(Section.Leaders.name) {
+                    LeadersScreen(
+                        repository,
+                        initialLeaders,
+                        Modifier.padding(padding),
+                        open = { open(Destination.Leader(it)) },
+                        openHelp = { open(Destination.Help) },
+                    )
+                }
             }
         }
-        Destination.Help -> HelpScreen(back)
-        is Destination.Singing -> SingingScreen(
-            repository, page.id, back, audioPlayer,
-            openSong = { open(Destination.Song(it)) },
-            openText = { open(Destination.SingingText(page.id)) },
-            openMap = { title -> open(Destination.LocationsMap(title, singingId = page.id)) },
-        )
-        is Destination.SingingText -> SingingTextScreen(repository, page.id, back)
-        is Destination.Song -> SongScreen(
-            repository,
-            page.id,
-            back = back,
-            audioPlayer = audioPlayer,
-            openSinging = { open(Destination.Singing(it)) },
-            openLeader = { open(Destination.Leader(it)) },
-            openSong = { open(Destination.Song(it)) },
-            openMap = { title -> open(Destination.SongMap(page.id, title)) },
-        )
-        is Destination.Leader -> LeaderScreen(
-            repository, page.id, back,
-            openSong = { songId, songTitle ->
-                open(Destination.LeaderSong(page.id, "", songId, songTitle))
-            },
-            openAll = { name -> open(Destination.LeaderLessons(page.id, name)) },
-            openMap = { title -> open(Destination.LocationsMap(title, leaderId = page.id)) },
-        )
-        is Destination.LeaderSong -> LeaderSongScreen(
-            repository = repository,
-            leaderId = page.leaderId,
-            leaderName = page.leaderName,
-            songId = page.songId,
-            songTitle = page.songTitle,
-            back = back,
-            openSong = { open(Destination.Song(page.songId)) },
-            openSinging = { open(Destination.Singing(it)) },
-        )
-        is Destination.LeaderLessons -> LeaderLessonsScreen(
-            repository, page.id, page.name, back, audioPlayer,
-            openSinging = { open(Destination.Singing(it)) },
-        )
-        is Destination.LocationsMap -> LocationsMapScreen(
-            repository, page.title, back,
-            openSinging = { open(Destination.Singing(it)) },
-            singingId = page.singingId,
-            leaderId = page.leaderId,
-        )
-        is Destination.SongMap -> SongHeatmapScreen(repository, page.id, page.title, back)
-    }
+
+        when (val page = destination) {
+            Destination.List -> Unit
+            Destination.Help -> HelpScreen(back)
+            is Destination.Singing -> SingingScreen(
+                repository, page.id, back, audioPlayer,
+                openSong = { open(Destination.Song(it)) },
+                openText = { open(Destination.SingingText(page.id)) },
+                openMap = { title -> open(Destination.LocationsMap(title, singingId = page.id)) },
+            )
+            is Destination.SingingText -> SingingTextScreen(repository, page.id, back)
+            is Destination.Song -> SongScreen(
+                repository,
+                page.id,
+                back = back,
+                audioPlayer = audioPlayer,
+                openSinging = { open(Destination.Singing(it)) },
+                openLeader = { open(Destination.Leader(it)) },
+                openSong = { open(Destination.Song(it)) },
+                openMap = { title -> open(Destination.SongMap(page.id, title)) },
+            )
+            is Destination.Leader -> LeaderScreen(
+                repository, page.id, back,
+                openSong = { songId, songTitle ->
+                    open(Destination.LeaderSong(page.id, "", songId, songTitle))
+                },
+                openAll = { name -> open(Destination.LeaderLessons(page.id, name)) },
+                openMap = { title -> open(Destination.LocationsMap(title, leaderId = page.id)) },
+            )
+            is Destination.LeaderSong -> LeaderSongScreen(
+                repository = repository,
+                leaderId = page.leaderId,
+                leaderName = page.leaderName,
+                songId = page.songId,
+                songTitle = page.songTitle,
+                back = back,
+                openSong = { open(Destination.Song(page.songId)) },
+                openSinging = { open(Destination.Singing(it)) },
+            )
+            is Destination.LeaderLessons -> LeaderLessonsScreen(
+                repository, page.id, page.name, back, audioPlayer,
+                openSinging = { open(Destination.Singing(it)) },
+            )
+            is Destination.LocationsMap -> LocationsMapScreen(
+                repository, page.title, back,
+                openSinging = { open(Destination.Singing(it)) },
+                singingId = page.singingId,
+                leaderId = page.leaderId,
+            )
+            is Destination.SongMap -> SongHeatmapScreen(repository, page.id, page.title, back)
+        }
         audioPlayer.currentTrack?.let {
             FloatingAudioPlayer(
                 audioPlayer,
@@ -259,7 +275,7 @@ private fun SingingsScreen(
     openMap: () -> Unit,
     openHelp: () -> Unit,
 ) {
-    var query by remember { mutableStateOf("") }
+    var query by rememberSaveable { mutableStateOf("") }
     val data = load(query) { repository.singings(query) }
     val listState = rememberLazyListState()
     val groups = data.value?.groupBy(SingingSummary::year)?.toList().orEmpty()
@@ -283,13 +299,13 @@ private fun SongsScreen(
     open: (Int) -> Unit,
     openHelp: () -> Unit,
 ) {
-    var query by remember { mutableStateOf("") }
-    var sortMode by remember { mutableStateOf(SongSortMode.PageNumber) }
+    var query by rememberSaveable { mutableStateOf("") }
+    var sortMode by rememberSaveable(stateSaver = SongSortModeSaver) { mutableStateOf(SongSortMode.PageNumber) }
     var sortMenuExpanded by remember { mutableStateOf(false) }
     var showFilter by remember { mutableStateOf(false) }
-    var filter by remember { mutableStateOf(SongFilter()) }
+    var filter by rememberSaveable(stateSaver = SongFilterSaver) { mutableStateOf(SongFilter()) }
     val books = load(Unit) { repository.books() }
-    var selectedBookId by remember { mutableStateOf<Int?>(null) }
+    var selectedBookId by rememberSaveable { mutableStateOf<Int?>(null) }
     LaunchedEffect(books.value) {
         if (selectedBookId == null) selectedBookId = books.value?.firstOrNull()?.id
     }
@@ -369,6 +385,33 @@ private enum class SongSortMode(val label: String, val comparator: Comparator<So
     TotalLessons("Total Lesson Count", compareByDescending<SongSummary> { it.lessonCount }.thenBy { it.id }),
 }
 
+private val SongSortModeSaver = Saver<SongSortMode, String>(
+    save = { it.name },
+    restore = SongSortMode::valueOf,
+)
+
+private val SongFilterSaver = listSaver<SongFilter, Any>(
+    save = {
+        listOf(
+            it.pageLow, it.pageHigh,
+            ArrayList(it.positions), ArrayList(it.sides), ArrayList(it.times),
+            ArrayList(it.modes), ArrayList(it.keys), ArrayList(it.meters),
+        )
+    },
+    restore = {
+        SongFilter(
+            pageLow = it[0] as Int,
+            pageHigh = it[1] as Int,
+            positions = (it[2] as ArrayList<*>).filterIsInstance<String>().toSet(),
+            sides = (it[3] as ArrayList<*>).filterIsInstance<String>().toSet(),
+            times = (it[4] as ArrayList<*>).filterIsInstance<String>().toSet(),
+            modes = (it[5] as ArrayList<*>).filterIsInstance<String>().toSet(),
+            keys = (it[6] as ArrayList<*>).filterIsInstance<String>().toSet(),
+            meters = (it[7] as ArrayList<*>).filterIsInstance<String>().toSet(),
+        )
+    },
+)
+
 @Composable
 private fun LeadersScreen(
     repository: MinutesRepository,
@@ -377,8 +420,8 @@ private fun LeadersScreen(
     open: (Int) -> Unit,
     openHelp: () -> Unit,
 ) {
-    var query by remember { mutableStateOf("") }
-    var sortMode by remember { mutableStateOf(LeaderSortMode.Name) }
+    var query by rememberSaveable { mutableStateOf("") }
+    var sortMode by rememberSaveable(stateSaver = LeaderSortModeSaver) { mutableStateOf(LeaderSortMode.Name) }
     var sortMenuExpanded by remember { mutableStateOf(false) }
     val data = load(query, initialValue = initialLeaders.takeIf { query.isEmpty() }) { repository.leaders(query) }
     val listState = rememberLazyListState()
@@ -445,6 +488,11 @@ private enum class LeaderSortMode(val label: String, val comparator: Comparator<
         Top20 -> leader.top20Count
     }
 }
+
+private val LeaderSortModeSaver = Saver<LeaderSortMode, String>(
+    save = { it.name },
+    restore = LeaderSortMode::valueOf,
+)
 
 @Composable
 private fun SingerSectionHeader(initial: String) {
