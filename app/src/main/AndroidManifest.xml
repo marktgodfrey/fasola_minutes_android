@@ -11,6 +11,7 @@
         android:theme="@style/Theme.FaSoLaMinutes">
         <activity
             android:name=".MainActivity"
+            android:configChanges="orientation|screenSize"
             android:exported="true"
             android:theme="@style/Theme.FaSoLaMinutes.Starting">
             <intent-filter>
